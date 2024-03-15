@@ -36,6 +36,9 @@ def test_velocity_usq():
                 continue
             gcov = _gcov_bl(bhspin, radius)
             for veltype in _allowed_velocity_models:
+                # ignore certain "special case" models in this "randomized" test
+                if veltype in ['fromfile']:
+                    continue
                 if veltype == 'simfit':   # TODO, it appears that this model is broken?
                     continue
                 print(f'Testing u.u == -1 for {veltype} with a={bhspin} at r={radius}...')
@@ -44,6 +47,24 @@ def test_velocity_usq():
                 ucov = np.einsum('ij,i...->j...', gcov, ucon)
                 usq = np.einsum('i...,i...->...', ucon, ucov)
                 assert np.isclose(usq, -1., rtol=1.e-5)
+
+
+def test_velocity_fromfile():
+    """
+    Check that the 'fromfile' velocity model produces expected four-velocities.
+    """
+    v = Velocity('fromfile', file='tests/data/a0p6_inflow.csv')
+    tests = {
+        # radius, theta -> ucon0, ucon1, ucon2, ucon3
+        (2.15708, _MIDPLANE): [5.0056, -0.54416, 0.0, 0.75899],
+        (2.5, _MIDPLANE): [3.0016, -0.45323831, 0.0, 0.41926807],
+        (3.58635, _MIDPLANE): [1.7755, -0.22549, 0.0, 0.19684],
+        (4.90566, _MIDPLANE): [1.4859, -0.021582, 0.0, 0.12754],
+    }
+
+    for (radius, theta), ucon in tests.items():
+        ucon_out = np.squeeze(v.u_lab(0.6, radius, th=theta))
+        assert np.allclose(ucon_out, ucon, rtol=1.e-4)
 
 
 def test_velocity_general():

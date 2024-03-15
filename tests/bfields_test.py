@@ -26,6 +26,24 @@ def test_bfield_bz_guess():
         assert np.allclose(Bfield_expected, Bfield_out[2] / Bfield_out[0], rtol=1.e-5)
 
 
+def test_bfield_fromfile():
+    """
+    Check that the 'fromfile' Bfield model produces expected lab frame magnetic fields.
+    """
+    b = Bfield('fromfile', file='tests/data/a0p6_inflow.csv')
+    tests = {
+        # radius, theta -> Br, Bth, Bph
+        (2.15708, _MIDPLANE): [0.84877, 0.0, -0.53419],
+        (2.5, _MIDPLANE): [0.63206, 0.0, -0.23666],
+        (3.58635, _MIDPLANE): [0.30706, 0.0, -0.066873],
+        (4.90566, _MIDPLANE): [0.16411, 0.0, -0.029673],
+    }
+
+    for (radius, theta), Brhp in tests.items():
+        Bfield_out = np.squeeze(b.bfield_lab(0.6, radius, th=theta))
+        assert np.allclose(Bfield_out, Brhp, rtol=1.e-4)
+
+
 def test_bfield_bz_monopole():
     """
     Check whether a few known inputs produce expected output for the 'bz_monopole'

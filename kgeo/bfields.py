@@ -34,7 +34,7 @@ fiprime = fi.derivative()
 # used in testing
 _allowed_bfield_models = [
     'rad', 'vert', 'tor', 'simple', 'simple_rm1', 'bz_monopole',
-    'bz_guess', 'bz_para', 'const_comoving'
+    'bz_guess', 'bz_para', 'const_comoving', 'fromfile'
 ]
 
 
@@ -66,40 +66,54 @@ class Bfield(object):
             raise Exception(f"fieldtype {fieldtype} not recognized in Bfield!")
 
         self.fieldtype = fieldtype
-        if self.fieldtype in ['rad','vert','tor','simple','simple_rm1','bz_monopole','bz_guess','bz_para']:
+        if self.fieldtype in ['rad', 'vert', 'tor', 'simple', 'simple_rm1', 'bz_monopole',
+                              'bz_guess', 'bz_para', 'fromfile']:
             self.fieldframe = 'lab'
         elif self.fieldtype in ['const_comoving']:
             self.fieldframe = 'comoving'
         else:
-            raise Exception("fieldtype %s not recognized in Bfield!"%self.fieldtype)
+            raise Exception("fieldtype '%s' not recognized in Bfield!"%self.fieldtype)
 
         self.kwargs = kwargs
 
-        if self.fieldframe not in ['lab','comoving']:
+        if self.fieldframe not in ['lab', 'comoving']:
             raise Exception("Bfield fieldframe must be 'lab' or 'comoving'!")
 
-        if self.fieldtype in ['bz_monopole','bz_guess','bz_para']:
+        if self.fieldtype in ['bz_monopole', 'bz_guess', 'bz_para']:
             self.secondorder_only = self.kwargs.get('secondorder_only', False)
             self.C = self.kwargs.get('C', 1)
-        elif self.fieldtype=='rad':
-            self.Cr=1; self.Cvert=0; self.Cph=0
-        elif self.fieldtype=='vert':
-            self.Cr=0; self.Cvert=1; self.Cph=0
-        elif self.fieldtype=='tor':
-            self.Cr=0; self.Cvert=0; self.Cph=1
+
+        elif self.fieldtype == 'rad':
+            self.Cr = 1
+            self.Cvert = 0
+            self.Cph = 0
+
+        elif self.fieldtype == 'vert':
+            self.Cr = 0
+            self.Cvert = 1
+            self.Cph = 0
+
+        elif self.fieldtype == 'tor':
+            self.Cr = 0
+            self.Cvert = 0
+            self.Cph = 1
+
+        elif self.fieldtype == 'fromfile':
+            self.filename = self.kwargs.get('file', None)
+            self.cached_data = load_cache_from_file(self.filename)
+
         else:
             self.Cr = self.kwargs.get('Cr',0)
             self.Cvert = self.kwargs.get('Cvert',0)
             self.Cph = self.kwargs.get('Cph',0)
-
-            if self.Cr==self.Cvert==self.Cph==0.:
-                raise Exception("all field coefficients are 0!")
+            if self.Cr == self.Cvert == self.Cph == 0.:
+                raise Exception("all field coefficients cannot be 0!")
 
     def bfield_lab(self, a, r, th=np.pi/2):
         """lab frame b field starF^i0"""
 
         if self.fieldframe!='lab':
-            raise Exception("Bfield.bfield_lab only supported for Bfield.fieldtype==lab")
+            raise Exception("bfield_lab only supported for fieldtype==lab")
 
         if self.fieldtype in ['simple', 'rad', 'vert', 'tor']:
             b_components = Bfield_simple(a, r, (self.Cr, self.Cvert, self.Cph))
@@ -114,8 +128,11 @@ class Bfield(object):
         elif self.fieldtype=='bz_guess':
             (B1,B2,B3,omega) = Bfield_BZmagic(a, r, th, self.C)
             b_components = (B1,B2,B3)
+        elif self.fieldtype=='fromfile':
+            B1,B2,B3 = Bfield_from_cache(a, r, self.cached_data)
+            b_components = (B1,B2,B3)
         else:
-            raise Exception("fieldtype %s not recognized in Bfield.bfield_lab!"%self.fieldtype)
+            raise Exception("fieldtype '%s' not recognized in Bfield.bfield_lab!"%self.fieldtype)
 
         return b_components
 
@@ -129,7 +146,7 @@ class Bfield(object):
                             -1*self.Cvert*np.ones(r.shape),
                             self.Cph*np.ones(r.shape))
         else:
-            raise Exception("fieldtype %s not recognized in Bfield.bfield_comoving!"%self.fieldtype)
+            raise Exception("fieldtype '%s' not recognized in Bfield.bfield_comoving!"%self.fieldtype)
 
         return b_components
 
@@ -143,7 +160,7 @@ class Bfield(object):
         elif self.fieldtype=='bz_para':
             (B1,B2,B3,omega) = Bfield_BZpara(a, r, th, self.C)
         else:
-            raise Exception("self.efield_lab currently only works for self.fieldtype='bz_monopole' or 'bz_guess'!")
+            raise Exception("omega_field currently only works for fieldtype='bz_monopole', 'bz_guess', or 'bz_para'!")
         return omega
 
     def efield_lab(self, a, r, th=np.pi/2):
@@ -174,7 +191,7 @@ class Bfield(object):
             # (F01, F02, F03, F12, F13, F23) = self.faraday(a,r)
             # e_components = (F01, F02, F03)
         else:
-            raise Exception("self.efield_lab currently only works for self.fieldtype='bz_monopole' or 'bz_guess'!")
+            raise Exception("efield_lab currently only works for fieldtype='bz_monopole', 'bz_guess', or 'bz_para'!")
 
         return e_components
 
@@ -253,6 +270,66 @@ class Bfield(object):
             raise Exception("self.faraday currently only works for self.fieldtype='bz_monopole' or 'bz_guess'!")
 
         return F_out
+
+
+def load_cache_from_file(filename):
+    """
+    Load Br,Btheta,Bphi primitive (lab frame) magnetic field components from file
+    """
+    # load header from file
+    with open(filename, 'r') as f:
+        header = f.readline().strip()
+        if header[0] != '#':
+            header = None
+            raise Exception("file %s does not have a header!" % filename)
+        else:
+            header = [x.strip() for x in header[1:].split(',')]
+
+    # load header from file
+    with open(filename, 'r') as f:
+        header = f.readline().strip()
+        if header[0] != '#':
+            header = None
+            raise Exception("file %s does not have a header!" % filename)
+        else:
+            header = [x.strip() for x in header[1:].split(',')]
+
+    # load data from file
+    data = np.loadtxt(filename, delimiter=',', skiprows=1)
+    n_samples, _ = data.shape
+    radii = data[:, header.index('r')]
+
+    Br = np.zeros_like(radii)
+    Bth = np.zeros_like(radii)
+    Bph = np.zeros_like(radii)
+
+    if 'Br' in header:
+        Br = data[:, header.index('Br')]
+    if 'Btheta' in header:
+        Bth = data[:, header.index('Btheta')]
+    if 'Bphi' in header:
+        Bph = data[:, header.index('Bphi')]
+
+    return dict(radii=radii, Br=Br, Bth=Bth, Bph=Bph)
+
+
+def Bfield_from_cache(a, r, rb123_cache):
+    """
+    Four-velocity as linearly interpolated from input file. By
+    convention, one file is for a single spin, which means that
+    this function will fail *silently* for other cases.
+    """
+    # TODO add check for spin?
+
+    # cast input to numpy array
+    if not isinstance(r, np.ndarray): r = np.array([r]).flatten()
+
+    # get values from cache
+    Br = np.interp(r, rb123_cache['radii'], rb123_cache['Br'])
+    Bth = np.interp(r, rb123_cache['radii'], rb123_cache['Bth'])
+    Bph = np.interp(r, rb123_cache['radii'], rb123_cache['Bph'])
+
+    return (Br, Bth, Bph)
 
 
 def Bfield_simple(a, r, coeffs):

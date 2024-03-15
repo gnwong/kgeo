@@ -20,7 +20,7 @@ BFIELD_DEFAULT = Bfield('bz_para')
 # used in testing
 _allowed_velocity_models = [
     'zamo', 'infall', 'kep', 'cunningham', 'subkep', 'cunningham_subkep',
-    'general', 'gelles', 'simfit', 'driftframe'
+    'general', 'gelles', 'simfit', 'fromfile', 'driftframe'
 ]
 
 class Velocity(object):
@@ -63,7 +63,7 @@ class Velocity(object):
 
                 Note the retrograde flag has two general effects:
                     - the radius of the ISCO is flipped
-                    - in computing Omega_kep, both the sign of the spin and 
+                    - in computing Omega_kep, both the sign of the spin and
                       the overall sign of Omega_kep are flipped, so that
                       Omega = - 1 / (r^1.5 - a)
 
@@ -125,6 +125,10 @@ class Velocity(object):
             self.p2 = self.kwargs.get('p2', P2)
             self.dd = self.kwargs.get('dd', DD)
 
+        elif self.veltype=='fromfile':
+            self.filename = self.kwargs.get('file', None)
+            self.cached_data = load_cache_from_file(self.filename)
+
         elif self.veltype=='driftframe':
             self.bfield = self.kwargs.get('bfield', BFIELD_DEFAULT)
             self.nu_parallel = self.kwargs.get('nu_parallel',0)
@@ -150,12 +154,88 @@ class Velocity(object):
             ucon = u_gelles(a, r, beta=self.gelles_beta, chi=self.gelles_chi)
         elif self.veltype=='simfit':
             ucon = u_grmhd_fit(a,r, ell_isco=self.ell_isco, vr_isco=self.vr_isco, p1=self.p1, p2=self.p2, dd=self.dd)
+        elif self.veltype=='fromfile':
+            ucon = u_from_u123(a, r, self.cached_data)
         elif self.veltype=='driftframe':
             ucon = u_driftframe(a, r, bfield=self.bfield, nu_parallel=self.nu_parallel, th=th)
         else:
             raise Exception("veltype %s not recognized in Velocity.u_lab!" % self.veltype)
 
         return ucon
+
+
+def load_cache_from_file(filename):
+    """
+    Load U123 primitive velocity data from file into cache.
+    """
+    # load header from file
+    with open(filename, 'r') as f:
+        header = f.readline().strip()
+        if header[0] != '#':
+            header = None
+            raise Exception("file %s does not have a header!" % filename)
+        else:
+            header = [x.strip() for x in header[1:].split(',')]
+
+    # load data from file
+    data = np.loadtxt(filename, delimiter=',', skiprows=1)
+    n_samples, _ = data.shape
+    radii = data[:, header.index('r')]
+
+    U1 = np.zeros_like(radii)
+    U2 = np.zeros_like(radii)
+    U3 = np.zeros_like(radii)
+
+    if 'U1' in header:
+        U1 = data[:, header.index('U1')]
+    if 'U2' in header:
+        U2 = data[:, header.index('U2')]
+    if 'U3' in header:
+        U3 = data[:, header.index('U3')]
+
+    return dict(radii=radii, U1=U1, U2=U2, U3=U3)
+
+
+def u_from_u123(a, r, ru123_cache):
+    """
+    Four-velocity as linearly interpolated from input file. By
+    convention, one file is for a single spin, which means that
+    this function will fail *silently* for other cases.
+    """
+    # TODO add check for spin?
+
+    # cast input to numpy array
+    if not isinstance(r, np.ndarray): r = np.array([r]).flatten()
+
+    # get primitives
+    u1 = np.interp(r, ru123_cache['radii'], ru123_cache['U1'])
+    u2 = np.interp(r, ru123_cache['radii'], ru123_cache['U2'])
+    u3 = np.interp(r, ru123_cache['radii'], ru123_cache['U3'])
+
+    # metric (gcov)
+    r2 = r*r
+    a2 = a*a
+    th = np.pi/2. # TODO equatorial only
+    Delta = r2 - 2*r + a2
+    Sigma = r2 + a2 * np.cos(th)**2
+    g00 = -(1-2*r/Sigma)
+    g11 = Sigma/Delta
+    g22 = Sigma
+    g33 = (r2 + a2 + 2*r*(a*np.sin(th))**2 / Sigma) * np.sin(th)**2
+    g03 = -2*r*a*np.sin(th)**2 / Sigma
+    # inverse metric (gcon)
+    gcon00 = - (r2 + a2 +2*r*a2 / Sigma * np.sin(th)**2) / Delta
+    gcon03 = -2*r*a / Sigma / Delta
+
+    alpha = 1. / np.sqrt(-gcon00)
+    gamma = np.sqrt(1. + g11*u1*u1 + g22*u2*u2 + g33*u3*u3)
+
+    u0 = gamma / alpha
+    u1 = u1
+    u2 = u2
+    u3 = u3 - gamma * alpha * gcon03
+
+    return (u0, u1, u2, u3)
 
 
 def u_zamo(a, r):
